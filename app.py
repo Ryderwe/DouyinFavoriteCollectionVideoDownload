@@ -571,8 +571,11 @@ class WebEngineView(QWebEngineView):
                 const originalSend = XMLHttpRequest.prototype.send;
                 XMLHttpRequest.prototype.send = function(body) {
                     this.addEventListener('load', () => {
-                        if (this._url.includes('listcollection') && 
-                            this.getResponseHeader('Content-Type') && this.getResponseHeader('Content-Type').includes('application/json')) {
+                        if ((this._url.includes('listcollection') || 
+                             this._url.includes('aweme/post') ||
+                             this._url.includes('aweme/favorite')) && 
+                            this.getResponseHeader('Content-Type') && 
+                            this.getResponseHeader('Content-Type').includes('application/json')) {
                             try {
                                 const jsonData = JSON.parse(this.responseText);
                                 console.log('DOUYIN_JSON:' + JSON.stringify(jsonData));
@@ -589,8 +592,11 @@ class WebEngineView(QWebEngineView):
                 window.fetch = function(input, init) {
                     const requestUrl = typeof input === 'string' ? input : input.url;
                     return originalFetch(input, init).then(response => {
-                        if (requestUrl.includes('listcollection') && 
-                            response.headers.get('Content-Type') && response.headers.get('Content-Type').includes('application/json')) {
+                        if ((requestUrl.includes('listcollection') || 
+                             requestUrl.includes('aweme/post') ||
+                             requestUrl.includes('aweme/favorite')) && 
+                            response.headers.get('Content-Type') && 
+                            response.headers.get('Content-Type').includes('application/json')) {
                             response.clone().json().then(data => {
                                 console.log('DOUYIN_JSON:' + JSON.stringify(data));
                             });
@@ -660,15 +666,40 @@ class MainWindow(QMainWindow):
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
 
+        # 功能选择区域
+        function_layout = QHBoxLayout()
+        function_layout.addWidget(QLabel("请选择功能:"))
+        
+        self.favorite_button = QPushButton("下载收藏视频")
+        self.favorite_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.favorite_button.clicked.connect(lambda: self.select_function("favorite"))
+        
+        self.profile_button = QPushButton("下载用户主页视频")
+        self.profile_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.profile_button.clicked.connect(lambda: self.select_function("profile"))
+        
+        self.like_button = QPushButton("下载喜欢视频")
+        self.like_button.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.like_button.clicked.connect(lambda: self.select_function("like"))
+        
+        function_layout.addWidget(self.favorite_button)
+        function_layout.addWidget(self.profile_button)
+        function_layout.addWidget(self.like_button)
+        function_layout.addStretch()
+        layout.addLayout(function_layout)
+
         # URL输入区域
         url_layout = QHBoxLayout()
         url_layout.addWidget(QLabel("目标URL:"))
-        self.url_input = QLineEdit("https://www.douyin.com/user/self?showTab=favorite_collection")
+        self.url_input = QLineEdit()
+        self.url_input.setPlaceholderText("请先选择功能...")
+        self.url_input.setEnabled(False)
         url_layout.addWidget(self.url_input)
 
         self.load_button = QPushButton("加载页面")
         self.load_button.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         self.load_button.clicked.connect(self.load_url)
+        self.load_button.setEnabled(False)
         url_layout.addWidget(self.load_button)
 
         layout.addLayout(url_layout)
@@ -702,7 +733,7 @@ class MainWindow(QMainWindow):
 
         # 状态标签和进度条
         status_layout = QHBoxLayout()
-        self.status_label = QLabel("准备就绪")
+        self.status_label = QLabel("请选择要使用的功能")
         self.status_label.setStyleSheet("padding: 5px;")
         status_layout.addWidget(self.status_label, 1)
 
@@ -1032,22 +1063,110 @@ class MainWindow(QMainWindow):
     def load_url(self):
         url = self.url_input.text().strip()
         if not url:
-            self.status_label.setText("请输入有效的URL")
+            self.status_label.setText("请输入有效的URL或用户ID")
             return
-        
-        if not url.startswith("http"):
-            url = "https://" + url
-        
+
         # 重置浏览器捕获的数据
         self.browser.reset_captured_data()
-        self.status_label.setText(f"正在加载: {url}")
-        print(f"正在加载URL: {url}")
         
-        self.browser.load(QUrl(url))
+        if self.current_function == "profile":
+            # 提取用户ID
+            user_id = self.extract_user_id(url)
+            if not user_id:
+                self.status_label.setText("无法识别用户ID")
+                return
+                
+            # 构建API请求URL
+            api_url = (f"https://www.douyin.com/aweme/v1/web/aweme/post/?"
+                      f"device_platform=webapp&aid=6383&channel=channel_pc_web&"
+                      f"sec_user_id={user_id}&max_cursor=0&show_live_replay_strategy=1&"
+                      f"need_time_list=1&time_list_query=0&whale_cut_token=&cut_version=1&"
+                      f"count=18&publish_video_strategy_type=2&from_user_page=1")
+            
+            # 设置浏览器的目标URL
+            self.browser.target_url = api_url
+            
+            # 加载用户主页
+            profile_url = f"https://www.douyin.com/user/{user_id}"
+            self.status_label.setText(f"正在加载用户主页: {profile_url}")
+            self.browser.load(QUrl(profile_url))
+        
+        elif self.current_function == "like":
+            # 提取用户ID
+            user_id = self.extract_user_id(url)
+            if not user_id:
+                self.status_label.setText("无法识别用户ID")
+                return
+                
+            # 构建API请求URL
+            api_url = (f"https://www.douyin.com/aweme/v1/web/aweme/favorite/?"
+                      f"device_platform=webapp&aid=6383&channel=channel_pc_web&"
+                      f"sec_user_id={user_id}&max_cursor=0&min_cursor=0&"
+                      f"whale_cut_token=&cut_version=1&count=18&"
+                      f"publish_video_strategy_type=2")
+            
+            # 设置浏览器的目标URL
+            self.browser.target_url = api_url
+            
+            # 加载喜欢页面
+            like_url = f"https://www.douyin.com/user/{user_id}?showTab=like"
+            self.status_label.setText(f"正在加载喜欢页面: {like_url}")
+            self.browser.load(QUrl(like_url))
+        
+        else:  # favorite
+            # 收藏页面的原有逻辑
+            if not url.startswith("http"):
+                url = "https://" + url
+            self.status_label.setText(f"正在加载: {url}")
+            self.browser.load(QUrl(url))
+        
         self.extract_button.setEnabled(False)
         self.save_button.setEnabled(False)
         self.video_data = []  # 清空之前提取的视频数据
-    
+
+    def extract_user_id(self, input_text):
+        """从用户输入中提取用户ID"""
+        # 如果输入的是完整URL
+        if "douyin.com/user/" in input_text:
+            # 提取URL中最后的用户ID部分
+            user_id = input_text.split("/user/")[-1].split("?")[0].strip()
+            return user_id
+        # 如果输入的就是用户ID
+        return input_text.strip()
+
+    def select_function(self, function_type):
+        self.url_input.setEnabled(True)
+        self.load_button.setEnabled(True)
+        self.current_function = function_type  # 保存当前选择的功能
+        
+        if function_type == "favorite":
+            self.url_input.setText("https://www.douyin.com/user/self?showTab=favorite_collection")
+            self.status_label.setText("已选择: 下载收藏视频")
+            self.favorite_button.setStyleSheet("background-color: #007acc;")
+            self.profile_button.setStyleSheet("")
+            self.like_button.setStyleSheet("")
+            self.url_input.setPlaceholderText("请输入收藏页面URL...")
+        elif function_type == "profile":
+            self.url_input.setText("")
+            self.status_label.setText("已选择: 下载用户主页视频")
+            self.profile_button.setStyleSheet("background-color: #007acc;")
+            self.favorite_button.setStyleSheet("")
+            self.like_button.setStyleSheet("")
+            self.url_input.setPlaceholderText("请输入用户ID或用户主页URL...")
+        else:  # like
+            self.url_input.setText("")
+            self.status_label.setText("已选择: 下载喜欢视频")
+            self.like_button.setStyleSheet("background-color: #007acc;")
+            self.favorite_button.setStyleSheet("")
+            self.profile_button.setStyleSheet("")
+            self.url_input.setPlaceholderText("请输入用户ID或喜欢页面URL...")
+        
+        # 重置浏览器和数据
+        self.browser.reset_captured_data()
+        self.extract_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.video_data = []
+
     def extract_videos(self):
         if not self.browser.captured_data:
             self.status_label.setText("未捕获到任何数据")
